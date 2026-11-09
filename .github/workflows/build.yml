@@ -11,14 +11,20 @@ permissions:
 
 jobs:
   ios:
-    name: iOS simulator build
+    name: iOS build and optional signed IPA
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -31,6 +37,18 @@ jobs:
       - name: Generate Xcode project
         working-directory: ios
         run: xcodegen generate --spec project.yml
+      - name: Check whether Apple signing is configured
+        id: signing
+        shell: bash
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE_BASE64" && -n "$APPLE_CERTIFICATE_PASSWORD" && \
+                -n "$APPLE_PROVISIONING_PROFILE_BASE64" && -n "$APPLE_TEAM_ID" && \
+                -n "$KEYCHAIN_PASSWORD" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::IPA export skipped. Configure the Apple signing repository secrets to build an iPhone-installable IPA."
+          fi
       - name: Build iOS simulator app
         run: >-
           xcodebuild
@@ -41,9 +59,90 @@ jobs:
           -derivedDataPath ios/build
           CODE_SIGNING_ALLOWED=NO
           build
-      - name: Upload iOS simulator app
+      - name: Upload simulator app
         uses: actions/upload-artifact@v4
         with:
           name: mova-ios-simulator
           path: ios/build/Build/Products/Debug-iphonesimulator/Mova.app
           if-no-files-found: error
+      - name: Install Apple signing certificate and provisioning profile
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/apple_distribution.p12"
+          PROFILE_PATH="$RUNNER_TEMP/mova.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/mova-signing.keychain-db"
+          PROFILE_PLIST="$RUNNER_TEMP/mova-profile.plist"
+
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          echo -n "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$PROFILE_PLIST")
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+      - name: Archive for iPhone
+        if: steps.signing.outputs.available == 'true'
+        run: >-
+          xcodebuild
+          -project ios/Mova.xcodeproj
+          -scheme Mova
+          -configuration Release
+          -destination 'generic/platform=iOS'
+          -archivePath "$RUNNER_TEMP/Mova.xcarchive"
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY='Apple Distribution'
+          DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+          PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID"
+          archive
+      - name: Export signed IPA
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          python3 - "$RUNNER_TEMP/ExportOptions.plist" "$APPLE_TEAM_ID" "$PROFILE_UUID" <<'PY'
+          import plistlib
+          import sys
+
+          path, team_id, profile_uuid = sys.argv[1:]
+          options = {
+              "destination": "export",
+              "method": "ad-hoc",
+              "signingStyle": "manual",
+              "teamID": team_id,
+              "provisioningProfiles": {"app.mova.messenger": profile_uuid},
+              "stripSwiftSymbols": True,
+          }
+          with open(path, "wb") as output:
+              plistlib.dump(options, output)
+          PY
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Mova.xcarchive" \
+            -exportPath "$RUNNER_TEMP/ipa" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+      - name: Upload signed IPA
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mova-iphone-ipa
+          path: ${{ runner.temp }}/ipa/*.ipa
+          if-no-files-found: error
+      - name: Remove Apple signing material
+        if: always() && steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/mova-signing.keychain-db" || true
+          if [[ -n "${PROFILE_UUID:-}" ]]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          fi

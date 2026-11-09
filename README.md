@@ -19,3 +19,15 @@ The handle must be searchable, so Supabase necessarily stores a normalized handl
 ## Build prerequisites
 
 JDK 17 or later, Gradle, Android SDK, and Xcode on macOS are required. iOS apps cannot be compiled or run on Windows. Create a Supabase project, run the migration in `supabase/migrations/`, then configure the project URL and publishable key as described in `supabase/README.md`.
+
+## iPhone test build
+
+GitHub Actions always builds the iOS Simulator app. To also export an IPA that can be installed on a physical iPhone, configure these repository Actions secrets:
+
+- `APPLE_CERTIFICATE_BASE64` — base64-encoded Apple Distribution `.p12` certificate
+- `APPLE_CERTIFICATE_PASSWORD` — password for that `.p12`
+- `APPLE_PROVISIONING_PROFILE_BASE64` — base64-encoded Ad Hoc `.mobileprovision` profile
+- `APPLE_TEAM_ID` — Apple Developer Team ID
+- `KEYCHAIN_PASSWORD` — a temporary password used by the GitHub runner
+
+The Ad Hoc profile must use bundle ID `app.mova.messenger` and include the target iPhone's registered UDID. After adding the secrets, push to `main` or run **Build Mova iOS** manually. Download the `mova-iphone-ipa` artifact from the completed Actions run. Without signing secrets, Actions creates only the simulator artifact.
