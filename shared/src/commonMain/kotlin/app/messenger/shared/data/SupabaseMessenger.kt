@@ -5,6 +5,7 @@ import app.messenger.shared.model.Conversation
 import app.messenger.shared.model.UserSearchResult
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.parseSessionFromUrl
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
@@ -12,10 +13,9 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import io.github.jan.supabase.postgrest.query.Order
-import io.github.jan.supabase.postgrest.query.filter.FilterOperator
-import io.github.jan.supabase.postgrest.query.filter.FilterOperation
-import io.github.jan.supabase.postgrest.query.selectAsFlow
 import io.github.jan.supabase.realtime.Realtime
+import io.github.jan.supabase.realtime.selectAsFlow
+import io.github.jan.supabase.annotations.SupabaseExperimental
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CoroutineScope
@@ -123,10 +123,11 @@ class MessengerRepository internal constructor(private val supabase: SupabaseCli
         .decodeList<Message>()
         .sortedBy(Message::sentAt)
 
-    fun observeMessages(conversationId: String): Flow<List<Message>> = supabase.from("messages").selectAsFlow(
-        primaryKey = Message::id,
-        filter = FilterOperation("conversation_id", FilterOperator.EQ, conversationId),
-    )
+    @OptIn(SupabaseExperimental::class)
+    fun observeMessages(conversationId: String): Flow<List<Message>> = supabase.from("messages")
+        .selectAsFlow(primaryKey = Message::id) {
+            eq("conversation_id", conversationId)
+        }
 
     private val nativeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val nativeObservers = mutableMapOf<String, Job>()
