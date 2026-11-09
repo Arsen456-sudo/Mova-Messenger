@@ -1,0 +1,9 @@
+.gradle/
+**/build/
+local.properties
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/
+ios/Mova.xcodeproj/
+ios/DerivedData/
+Supabase.xcconfig

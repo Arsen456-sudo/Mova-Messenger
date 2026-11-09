@@ -1,0 +1,41 @@
+name: Mova
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+configs:
+  Debug: debug
+  Release: release
+targets:
+  Mova:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    configFiles:
+      Debug: Supabase.xcconfig
+      Release: Supabase.xcconfig
+    preBuildScripts:
+      - name: Build Kotlin Multiplatform framework
+        script: |
+          if [ "${OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED:-}" = "YES" ]; then
+            exit 0
+          fi
+          cd "${PROJECT_DIR}/.."
+          bash ./gradlew :shared:embedAndSignAppleFrameworkForXcode
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.mova.messenger
+        PRODUCT_NAME: Mova
+        INFOPLIST_FILE: Info.plist
+        SWIFT_VERSION: "5.9"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+        OTHER_LDFLAGS: "$(inherited) -framework MessengerShared"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        CODE_SIGNING_ALLOWED: NO
+        GENERATE_INFOPLIST_FILE: NO
+    scheme:
+      testTargets: []
